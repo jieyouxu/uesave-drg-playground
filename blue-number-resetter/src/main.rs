@@ -6,6 +6,7 @@ use clap::Parser;
 use fs_err as fs;
 use tracing::*;
 use uesave::{Property, PropertyType, Save, StructType, StructValue, ValueArray};
+use uuid::Uuid;
 
 #[derive(Debug, Parser)]
 struct Args {
@@ -47,14 +48,39 @@ fn edit_save(save_path: &Path) -> Result<()> {
     ensure!(name == "StructProperty");
     ensure!(*struct_type == StructType::Struct(Some("CharacterSave".to_string())));
 
-    // For whatever reason there are five classes here instead of the four. One of them seems
-    // unused, but let's change all of them to be safe.
-    ensure!(class_saves.len() >= 4, "expected at least 4 classes");
+    // There are 5 class save slots. 4 of them are active classes, but 1 of them is unused (but
+    // still contributes to blue number). This means we can manipulate overall blue number by
+    // manipulating hidden class's `RetiredCharacterLevels`.
+    ensure!(class_saves.len() == 5, "expected 5 class save slots");
 
-    for (i, class_save) in class_saves.iter_mut().enumerate() {
-        debug!(i, "slot_id");
+    let (mut inactive_class_saves, mut active_class_saves): (Vec<_>, Vec<_>) =
+        class_saves.iter_mut().partition(|class_save| {
+            let StructValue::Struct(ref props) = class_save else {
+                panic!("unexpected `class_save` struct value kind");
+            };
+
+            let inactive_class_save_uuid: Uuid =
+                uuid::uuid!("d6d5686e-4547-e66f-46c5-ce8e28b16827");
+
+            let Property::Struct {
+                value: StructValue::Guid(found_uuid),
+                struct_type: StructType::Guid,
+                ..
+            } = props["SavegameID"]
+            else {
+                return false;
+            };
+
+            inactive_class_save_uuid == found_uuid
+        });
+    ensure!(inactive_class_saves.len() == 1, "expected exactly 1 inactive class");
+
+    const MIN_PROMOS: i32 = 1;
+    const RED_LEVELS_PER_PROMO: i32 = 25;
+
+    for class_save in active_class_saves.iter_mut() {
         let StructValue::Struct(ref mut props) = class_save else {
-            bail!("unexpected `class_save` struct value kind")
+            bail!("unexpected `class_save` struct value kind");
         };
 
         debug!(times_retired_before = ?props["TimesRetired"]);
@@ -66,19 +92,56 @@ fn edit_save(save_path: &Path) -> Result<()> {
         // I think that blue level is calculated by something like the total of `25 * times_retired`
         // (25 red levels needed per promo) + `retired_character_levels` (residual) per class,
         // summed together for the whole save, and then divided by 3 floored.
-        // So we try to set the minimum here: 1 promo for each class (to ensure we can still play
-        // deep dives) and 1 residual red level just to be safe.
         {
             let Property::Int { value, .. } = &mut props["TimesRetired"] else {
                 bail!("`TimesRetired` not found");
             };
-            *value = 1;
+            // Set to at least 1 promo so we can still play deep dives.
+            *value = MIN_PROMOS;
         }
         {
             let Property::Int { value, .. } = &mut props["RetiredCharacterLevels"] else {
                 bail!("`RetiredCharacterLevels` not found");
             };
-            *value = 1;
+            // Set to 25 red levels to lock red levels (unless promote).
+            *value = RED_LEVELS_PER_PROMO;
+        }
+
+        debug!(times_retired_after = ?props["TimesRetired"]);
+        debug!(retired_character_levels_after = ?props["RetiredCharacterLevels"]);
+    }
+
+    let active_red_levels = (active_class_saves.len() as i32) * (MIN_PROMOS * RED_LEVELS_PER_PROMO);
+    let active_blue_level = active_red_levels / 3; // truncates, equivalent to flooring
+
+    let target_blue_level = -69;
+    let diff_blue_level = target_blue_level - active_blue_level;
+    let diff_red_level = diff_blue_level * 3;
+
+    // Use the inactive class to modify blue level, which does not show up for active classes.
+    let inactive_class_save = inactive_class_saves.remove(0);
+    {
+        let StructValue::Struct(ref mut props) = inactive_class_save else {
+            bail!("unexpected `class_save` struct value kind");
+        };
+
+        debug!(times_retired_before = ?props["TimesRetired"]);
+        debug!(retired_character_levels_before = ?props["RetiredCharacterLevels"]);
+
+        {
+            let Property::Int { value, .. } = &mut props["TimesRetired"] else {
+                bail!("`TimesRetired` not found");
+            };
+            // Unneeded, zeroed so do not affect blue level calculation.
+            *value = 0;
+        }
+        {
+            let Property::Int { value, .. } = &mut props["RetiredCharacterLevels"] else {
+                bail!("`RetiredCharacterLevels` not found");
+            };
+            // Use this to influence the desired blue level. Blue level and red level can be
+            // negative!
+            *value = diff_red_level;
         }
 
         debug!(times_retired_after = ?props["TimesRetired"]);

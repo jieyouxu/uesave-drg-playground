@@ -13,3 +13,4 @@ tracing.workspace = true
 anyhow.workspace = true
 tempfile.workspace = true
 bidiff = "1"
+uuid = "1"

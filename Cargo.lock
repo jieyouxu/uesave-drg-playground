@@ -106,6 +106,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "uesave",
+ "uuid",
 ]
 
 [[package]]
