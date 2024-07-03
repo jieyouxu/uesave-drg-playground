@@ -1,0 +1,11 @@
+[workspace]
+resolver = "2"
+members = ["blue-number-resetter", "logging"]
+
+[workspace.dependencies]
+tracing = { version = "0.1", features = ["attributes"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "registry", "std"] }
+thiserror = "1"
+anyhow = "1"
+fs-err = "2"
+tempfile = "3"
